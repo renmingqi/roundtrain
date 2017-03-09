@@ -8,46 +8,17 @@ Project: https://github.com/aymericdamien/TensorFlow-Examples/
 '''
 
 from __future__ import print_function
-
+from myUtil import *
 
 
 # Import MNIST data
 from tensorflow.examples.tutorials.mnist import input_data
-mnist = input_data.read_data_sets("MNIST_data/", one_hot=True)
-
+mnist = input_data.read_data_sets("MNIST_data/", one_hot=True,worker=1,dropboxname='Renming')
 import tensorflow as tf
 import time
-import os
 import numpy as np
-
-#
-model_path = "/Users/Renming/Dropbox/Apps/model.ckpt"
-model_path2 = "/Users/Renming/Dropbox/Apps/model2.ckpt"
-sub1 = '.index'
-name1 = model_path + sub1
-sub2 = '.meta'
-name2 = model_path + sub2
-sub3 = '.data-00000-of-00001'
-name3 = model_path + sub3
-names = [name1,name2,name3]
-mtime_last = [0,0,0]
-
-
-
-def getNewTime():
-    mtime_cur = []
-    for name in names:
-        mtime_cur.append(os.path.getmtime(name))
-    return mtime_cur
-
-
-def isFilesCreated():
-    res = True
-    for name in names:
-        if not os.path.isfile(name):
-            res = False
-    return res
-
+import paramiko
+import os
 # Parameters
 learning_rate = 0.001
 batch_size = 100
@@ -102,18 +73,20 @@ init = tf.global_variables_initializer()
 saver = tf.train.Saver()
 
 
+
 def load_run_save():
     with tf.Session() as sess:
 
         sess.run(init)
-        if not isFilesCreated():
-            print('model have not been trained' )
-        else:
-            saver.restore(sess, model_path )
+        if  isFilesCreated():
+            saver.restore(sess, local_path)
             print('load trained model')
 
+        else:
+            print('model have not been trained')
+
     # Training cycle
-        for epoch in range(3):
+        for epoch in range(1):
             avg_cost = 0.
             total_batch = int(mnist.train.num_examples / batch_size)
             # Loop over all batches
@@ -137,25 +110,54 @@ def load_run_save():
         print("Accuracy:", accuracy.eval({x: mnist.test.images, y: mnist.test.labels}))
 
     # Save model weights to disk
-        save_path = saver.save(sess, model_path)
+        save_path = saver.save(sess, local_path)
         print("Model saved in file: %s" % save_path)
 
-
-
-
-def watchFileChanges(mtime_last):
+def watchFileChanges(mtime_last,sftp,ssh):
     while True:
+        print("Watching")
         time.sleep(5)
-        if isFilesCreated():
-            mtime_cur = getNewTime()
-            if not np.array_equal(mtime_last,mtime_cur):
-                print('file changed')
-                load_run_save()
-                mtime_last = getNewTime()
+        locksExistence = queryFileExistence3(ssh,lock_names)
+            # if np.array_equal(locksExistence = [False,False,False]):
+            #     mtime_cur = queryLastModifiedTime3(ssh,remote_names)
+        if array_equal(locksExistence,[False, False, False]):
+            print('Enter first if')
+            remoteFilesExist=queryFileExistence3(ssh, remote_names)
+            if array_equal(remoteFilesExist, [True, True, True]):
+                print('enter second if')
+                mtime_cur = queryLastModifiedTime3(ssh, remote_names)
+                if not array_equal(mtime_last,mtime_cur):
+                    print('remote file changed, start download')
+                    downloadFile(sftp, remote_names, local_names)
+                    print('files downloaded')
+                    time.sleep(0.5)
+                    load_run_save()
+                    createLock3(ssh, lock_names)
+                    uploadFile(mtime_last,sftp, ssh, remote_names, local_names)
 
+
+#Build SSH and SFTP connection
+ssh = getSSHconnection()
+sftp = paramiko.SFTPClient.from_transport(ssh.get_transport())
+otherworker = 'worker2'
+#Train local model and save 3 files
 load_run_save()
-mtime_last = getNewTime()
-watchFileChanges(mtime_last)
+
+#Create 3 lock for files to be uploaded
+createLock3(ssh,lock_names)
+
+#Upload local files to remote server /tmp/xxx
+##  mtime_last will be updated for each upload.
+## locks will be removed.
+mtime_last = [0,0,0]
+
+uploadFile(mtime_last,sftp,ssh,remote_names,local_names)
+
+#Refresh the last-modified time
+
+#start polling
+watchFileChanges(mtime_last,sftp,ssh)
+
 
 
 
